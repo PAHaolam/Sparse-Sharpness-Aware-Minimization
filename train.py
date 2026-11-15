@@ -96,8 +96,7 @@ def main(args):
                     'args': args,
                 }, os.path.join(args.output_dir, args.output_name, 'checkpoint.pth'))
         
-        logger.wandb_log(epoch=epoch, **train_stats)
-        logger.wandb_log(epoch=epoch, **val_stats)
+        logger.wandb_log(epoch=epoch, **train_stats, **val_stats)
         msg = ' '.join([
             'Epoch:{epoch}',
             'Train Loss:{train_loss:.4f}',
