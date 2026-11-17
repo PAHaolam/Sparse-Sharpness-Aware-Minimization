@@ -13,14 +13,8 @@ class LRscheduler:
     def __init__(self, optimizer: optim.Optimizer, resume: bool = False):
         self.optimizer = optimizer
         
-        if not resume:
-            for group in optimizer.param_groups:
-                group.setdefault('initial_lr', group['lr'])
-        else:
-            for i, group in enumerate(optimizer.param_groups):
-                if 'initial_lr' not in group:
-                    raise KeyError("param 'initial_lr' is not specified "
-                                   "in param_groups[{}] when resuming an optimizer".format(i))
+        for group in optimizer.param_groups:
+            group.setdefault('initial_lr', group['lr'])
         self.base_lrs = [group['initial_lr'] for group in optimizer.param_groups]
 
     
