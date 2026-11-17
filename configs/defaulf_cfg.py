@@ -17,6 +17,8 @@ class default_parser:
         parser.add_argument('--output_name', type=str, default=None, help="Name of dir where save the log.txt&ckpt.pth of this experiment. (None means auto-set)")
         parser.add_argument('--resume', action='store_true', help="resume model,opt,etc.")
         parser.add_argument('--resume_path', type=str, default='.')
+        parser.add_argument('--wandb_id', type=str, default=None,
+                    help="Id của run wandb cần nối tiếp khi resume (lấy từ URL của run).")
 
         parser.add_argument('--seed', type=int, default=1234)
         parser.add_argument('--log_freq', type=int, default=10, help="Frequency of recording information.")
