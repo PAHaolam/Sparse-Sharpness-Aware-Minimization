@@ -30,6 +30,11 @@ class Logger():
                 'name': wandb_name,
             }
             if distributed: wandb_dict['group']='DDP'
+            
+            wandb_id = getattr(args, 'wandb_id', None)
+            if wandb_id:
+                wandb_dict.update(id=wandb_id, resume='allow')
+                
             self.run = wandb.init(**wandb_dict, config=args)
             wandb_step = 0
         else:
