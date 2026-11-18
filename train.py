@@ -96,6 +96,15 @@ def main(args):
                     'args': args,
                 }, os.path.join(args.output_dir, args.output_name, 'checkpoint.pth'))
         
+        if args.save and (epoch + 1) % args.save_freq == 0 and is_main_process():
+            torch.save({
+                'model': model_without_ddp.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'lr_scheduler': lr_scheduler.state_dict(),
+                'epoch': epoch,
+                'args': args,
+            }, os.path.join(args.output_dir, args.output_name, 'checkpoint_epoch{}.pth'.format(epoch + 1)))
+        
         logger.wandb_log(epoch=epoch, **train_stats, **val_stats)
         msg = ' '.join([
             'Epoch:{epoch}',

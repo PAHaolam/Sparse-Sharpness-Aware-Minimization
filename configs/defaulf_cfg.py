@@ -55,6 +55,8 @@ class default_parser:
         # adam
         parser.add_argument('--betas', type=float, default=None, nargs='+', help="Betas for AdamW Optimizer.(None means the default in optm)")
         parser.add_argument('--eps', type=float, default=None, help="Epsilon for AdamW Optimizer.(None means the default in optm)")
+        parser.add_argument('--save', action='store_true', help="Save a checkpoint every `save_freq` epochs ...")
+        parser.add_argument('--save_freq', type=int, default=20, help="Interval (epochs) between periodic checkpoints. Only works with `--save`.")
         return parser
 
     def sam_opt_parser(self):
