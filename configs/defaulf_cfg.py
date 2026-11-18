@@ -17,8 +17,9 @@ class default_parser:
         parser.add_argument('--output_name', type=str, default=None, help="Name of dir where save the log.txt&ckpt.pth of this experiment. (None means auto-set)")
         parser.add_argument('--resume', action='store_true', help="resume model,opt,etc.")
         parser.add_argument('--resume_path', type=str, default='.')
-        # parser.add_argument('--wandb_id', type=str, default=None,
-        #             help="Id của run wandb cần nối tiếp khi resume (lấy từ URL của run).")
+        parser.add_argument('--save', action='store_true', help="Save a checkpoint every `save_freq` epochs (epoch 20, 40, 60, ...), in addition to the best checkpoint.")
+        parser.add_argument('--require_r_curve', action='store_true', help="After every epoch, compute the ratio of params with r=log|(g_SAM-g_SGD)/g_SGD|<0 over the whole train set (batch size = --batch_size, perturbation radius = --rho). Writes r_curve.csv / r_curve.png to the output dir. Costs ~2 extra forward-backward passes over the train set per epoch.")
+        parser.add_argument('--save_freq', type=int, default=20, help="Interval (epochs) between periodic checkpoints. Only works with `--save`.")
 
         parser.add_argument('--seed', type=int, default=1234)
         parser.add_argument('--log_freq', type=int, default=10, help="Frequency of recording information.")
@@ -55,8 +56,6 @@ class default_parser:
         # adam
         parser.add_argument('--betas', type=float, default=None, nargs='+', help="Betas for AdamW Optimizer.(None means the default in optm)")
         parser.add_argument('--eps', type=float, default=None, help="Epsilon for AdamW Optimizer.(None means the default in optm)")
-        parser.add_argument('--save', action='store_true', help="Save a checkpoint every `save_freq` epochs ...")
-        parser.add_argument('--save_freq', type=int, default=20, help="Interval (epochs) between periodic checkpoints. Only works with `--save`.")
         return parser
 
     def sam_opt_parser(self):

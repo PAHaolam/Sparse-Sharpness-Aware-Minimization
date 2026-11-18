@@ -11,7 +11,7 @@ from solver.build import build_optimizer, build_lr_scheduler
 from utils.logger import Logger
 from utils.dist import init_distributed_model, is_main_process
 from utils.seed import setup_seed
-from utils.engine import train_one_epoch, evaluate
+from utils.engine import train_one_epoch, evaluate, compute_r_neg_ratio, append_r_curve, plot_r_curve
 
 def main(args):
     # init seed
@@ -65,6 +65,11 @@ def main(args):
         logger.log(f'Resume training from {args.resmue_path}.')
 
 
+    # r curve (ratio of params with r < 0, after every epoch)
+    r_csv_path = os.path.join(args.output_dir, args.output_name, 'r_curve.csv')
+    if args.require_r_curve and not args.resume and is_main_process() and os.path.exists(r_csv_path):
+        os.remove(r_csv_path)  # fresh run: do not append to a stale curve
+
     # start train:
     logger.log(f'Start training for {args.epochs} Epochs.')
     start_training = time.time()
@@ -85,6 +90,12 @@ def main(args):
         lr_scheduler.step(epoch)
         val_stats = evaluate(model, val_loader)
 
+        r_stats = {}
+        if args.require_r_curve:
+            r_stats = compute_r_neg_ratio(model_without_ddp, train_loader, criterion, rho=args.rho)
+            if is_main_process():
+                append_r_curve(r_csv_path, epoch + 1, r_stats['r_neg_ratio'])  # epoch + 1: same numbering as checkpoint_epoch{N}.pth
+
         if max_acc < val_stats["test_acc1"]:
             max_acc = val_stats["test_acc1"]
             if is_main_process:
@@ -96,6 +107,7 @@ def main(args):
                     'args': args,
                 }, os.path.join(args.output_dir, args.output_name, 'checkpoint.pth'))
         
+        # periodic checkpoint: epoch 20, 40, 60, ... (epoch is 0-based, so use epoch + 1)
         if args.save and (epoch + 1) % args.save_freq == 0 and is_main_process():
             torch.save({
                 'model': model_without_ddp.state_dict(),
@@ -104,8 +116,10 @@ def main(args):
                 'epoch': epoch,
                 'args': args,
             }, os.path.join(args.output_dir, args.output_name, 'checkpoint_epoch{}.pth'.format(epoch + 1)))
-        
+
         logger.wandb_log(epoch=epoch, **train_stats, **val_stats)
+        if r_stats:
+            logger.log('Epoch:{} Ratio of params with r<0: {:.2f}% (rho={})'.format(epoch, r_stats['r_neg_ratio'] * 100, args.rho))
         msg = ' '.join([
             'Epoch:{epoch}',
             'Train Loss:{train_loss:.4f}',
@@ -116,6 +130,8 @@ def main(args):
             'Test Acc5:{test_acc5:.4f}',
             'Time:{epoch_time:.3f}s'])
         logger.log(msg.format(epoch=epoch, **train_stats, **val_stats, max_acc=max_acc, epoch_time=time.time()-start_epoch))
+    if args.require_r_curve and is_main_process() and os.path.exists(r_csv_path):
+        plot_r_curve(r_csv_path, os.path.join(args.output_dir, args.output_name, 'r_curve.png'), title=args.output_name)
     logger.log('Train Finish. Max Test Acc1:{:.4f}'.format(max_acc))
     end_training = time.time()
     used_training = str(datetime.timedelta(seconds=end_training-start_training))

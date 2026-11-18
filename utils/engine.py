@@ -106,6 +106,111 @@ def evaluate(
         name: meter.global_avg for name, meter in _memory.meters.items()
     }
 
+def compute_r_neg_ratio(model, loader, criterion, rho):
+    """
+    Fraction of parameters whose relative difference ratio
+        r = log | (g_SAM - g_SGD) / g_SGD |
+    is < 0, measured over one full pass of `loader` (every batch: g_SGD at w,
+    g_SAM at w + rho * g_SGD / ||g_SGD||, both on the same batch).
+
+    The pass leaves training untouched: weights are restored exactly, BN buffers and
+    RNG states are restored, and gradients are cleared. Parameters with g_SGD == 0
+    (nan/inf ratio) are skipped. In distributed mode the counts are summed over ranks.
+    `model` should be the un-wrapped model (model_without_ddp) to avoid DDP grad sync.
+    """
+    was_training = model.training
+    model.train()
+    params = [p for p in model.parameters() if p.requires_grad]
+    device = params[0].device
+
+    # ---- backups
+    w_backup = [p.detach().clone() for p in params]
+    buf_backup = [b.detach().clone() for b in model.buffers()]
+    cpu_rng = torch.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+
+    counts = torch.zeros(2, dtype=torch.float64, device=device)  # [#(r<0), #valid]
+    for images, targets in loader:
+        images = images.to(device, non_blocking=True)
+        targets = targets.to(device, non_blocking=True)
+
+        # g_SGD at w
+        model.zero_grad(set_to_none=True)
+        criterion(model(images), targets).backward()
+        g_sgd = [p.grad.detach().clone() if p.grad is not None else torch.zeros_like(p) for p in params]
+
+        # g_SAM at w + e(w)
+        grad_norm = torch.sqrt(sum((g ** 2).sum() for g in g_sgd))
+        scale = rho / (grad_norm + 1e-7)
+        with torch.no_grad():
+            for p, g in zip(params, g_sgd):
+                p.add_(g * scale)
+        model.zero_grad(set_to_none=True)
+        criterion(model(images), targets).backward()
+
+        with torch.no_grad():
+            for p, w in zip(params, w_backup):
+                p.copy_(w)  # exact restore (add_/sub_ would leave rounding drift)
+            for p, g1 in zip(params, g_sgd):
+                g2 = p.grad if p.grad is not None else torch.zeros_like(p)
+                r = torch.log(((g2 - g1) / g1).abs())
+                r = r[torch.isfinite(r)]
+                counts[0] += (r < 0).sum()
+                counts[1] += r.numel()
+
+    # ---- restore state
+    model.zero_grad(set_to_none=True)
+    with torch.no_grad():
+        for b, bb in zip(model.buffers(), buf_backup):
+            b.copy_(bb)
+    torch.set_rng_state(cpu_rng)
+    if cuda_rng is not None:
+        torch.cuda.set_rng_state(cuda_rng)
+    model.train(was_training)
+
+    if is_dist_avail_and_initialized():
+        dist.all_reduce(counts)
+    return {'r_neg_ratio': (counts[0] / counts[1].clamp(min=1)).item()}
+
+
+def append_r_curve(csv_path, epoch, ratio):
+    """Append one `epoch,r_neg_ratio` row (header written when the file is new)."""
+    import os
+    new = not os.path.exists(csv_path)
+    with open(csv_path, 'a') as f:
+        if new:
+            f.write('epoch,r_neg_ratio\n')
+        f.write('{},{:.6f}\n'.format(epoch, ratio))
+
+
+def plot_r_curve(csv_path, png_path, title=None):
+    """Plot the (epoch, r<0 ratio) curve from the csv written by `append_r_curve`."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print('matplotlib not found: skip plotting r curve.')
+        return
+    epochs, ratios = [], []
+    with open(csv_path) as f:
+        next(f)
+        for line in f:
+            e, r = line.strip().split(',')
+            epochs.append(int(e))
+            ratios.append(float(r) * 100)
+    fig, ax = plt.subplots(figsize=(5, 3.6))
+    ax.plot(epochs, ratios, marker='o', markersize=2.5, linewidth=1.2)
+    ax.set_xlabel('Epoch')
+    ax.set_ylabel('Params with r < 0 (%)')
+    ax.grid(alpha=0.3)
+    if title:
+        ax.set_title(title, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(png_path, dpi=200)
+    plt.close(fig)
+
+
 def accuracy(output, targets, topk=(1,)):
     # output: [b, n]
     # targets: [b]
