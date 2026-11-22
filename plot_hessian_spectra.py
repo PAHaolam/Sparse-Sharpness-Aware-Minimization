@@ -29,12 +29,67 @@ import matplotlib.pyplot as plt
 import models  # noqa: F401
 from models.build import MODELS_REGISTRY
 
+from tqdm import tqdm                      # pip install tqdm
+
 from pyhessian import hessian              # từ PyHessian
+import pyhessian.hessian as _ph
 from density_plot import density_generate  # từ PyHessian
 
 # mean/std giống hệt data/dataset.py (CIFAR10_base)
 CIFAR10_MEAN = np.array([125.3, 123.0, 113.9]) / 255.0
 CIFAR10_STD = np.array([63.0, 62.1, 66.7]) / 255.0
+
+
+# ----------------------------------------------------------------------
+# Hiển thị tiến trình.
+# - Mỗi lần PyHessian tính 1 Hessian-vector product (hv) = 1 "bước" của
+#   power iteration / Lanczos  -> thanh tiến trình chính (đếm số hv).
+# - Nếu dùng nhiều mini-batch, mỗi hv phải duyệt qua TẤT CẢ batch
+#   -> thêm thanh tiến trình nhỏ theo từng batch.
+# ----------------------------------------------------------------------
+class _HvBar:
+    def __init__(self):
+        self.bar = None
+
+    def start(self, desc, total=None):
+        self.close()
+        self.bar = tqdm(total=total, desc=desc, unit="hv")
+
+    def tick(self):
+        if self.bar is not None:
+            self.bar.update(1)
+
+    def close(self):
+        if self.bar is not None:
+            self.bar.close()
+            self.bar = None
+
+
+HV = _HvBar()
+
+# trường hợp 1 batch: PyHessian gọi hessian_vector_product -> bọc lại để đếm
+_orig_hvp = _ph.hessian_vector_product
+
+
+def _counted_hvp(*a, **k):
+    out = _orig_hvp(*a, **k)
+    HV.tick()
+    return out
+
+
+_ph.hessian_vector_product = _counted_hvp
+
+
+class BatchProgress:
+    """Bọc list các batch: mỗi lần duyệt (= 1 hv) hiện thanh tiến trình theo batch."""
+
+    def __init__(self, batches):
+        self.batches = batches
+
+    def __iter__(self):
+        for b in tqdm(self.batches, desc="   batch", unit="batch", leave=False):
+            yield b
+        HV.tick()  # trường hợp nhiều batch: xong 1 lượt duyệt = xong 1 hv
 
 
 # ----------------------------------------------------------------------
@@ -93,7 +148,7 @@ def analyze(model, batches, device, lanczos_iter=100, n_v=1):
     if len(batches) == 1:
         comp = hessian(model, criterion, data=batches[0], cuda=cuda)
     else:
-        comp = hessian(model, criterion, dataloader=batches, cuda=cuda)
+        comp = hessian(model, criterion, dataloader=BatchProgress(batches), cuda=cuda)
 
     # sanity check: loss / acc của model trên đúng các mẫu dùng tính Hessian
     with torch.no_grad():
@@ -107,8 +162,11 @@ def analyze(model, batches, device, lanczos_iter=100, n_v=1):
     print(f"   loss={tot_loss / cnt:.4f} acc={correct / cnt:.4f} "
           f"(nếu acc ~10% nghĩa là load sai model/normalize)")
 
-    top, _ = comp.eigenvalues(top_n=5)           # power iteration
+    HV.start("Top-5 eigenvalue (power iteration)")      # tổng số hv tối đa 5*100, dừng sớm nếu hội tụ
+    top, _ = comp.eigenvalues(top_n=5)                  # power iteration
+    HV.start("Phổ Lanczos", total=n_v * lanczos_iter)
     eigen, weight = comp.density(iter=lanczos_iter, n_v=n_v)  # Lanczos (SLQ)
+    HV.close()
     return top[0], top[0] / top[4], eigen, weight
 
 
